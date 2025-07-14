@@ -143,8 +143,35 @@ def generate_double_step_pulse(time_vector, baseline, amp1, t_start1, steepness1
     decay_tail = np.exp(-np.maximum(0, time_vector - t_start1) / decay_tau)
     return baseline + combined_rise * decay_tail
 
-def generate_wavy_noise(n_samples, white_noise_level, colored_noise_level):
-    """Generates the wavy noise from the target image."""
+def generate_flat_top_pulse(time_vector, baseline, amplitude, t_start, rise_steepness, flat_duration, fall_steepness=None):
+    """Generates a flat-top pulse: fast rise, flat region, optional fall."""
+    # Fast rise
+    rise = 1 / (1 + np.exp(-rise_steepness * (time_vector - t_start)))
+    # Flat region: turn off the rise after t_start + flat_duration
+    flat = (time_vector > t_start) & (time_vector < t_start + flat_duration)
+    # Optional: add a falling edge
+    if fall_steepness is not None:
+        t_fall = t_start + flat_duration
+        fall = 1 / (1 + np.exp(fall_steepness * (time_vector - t_fall)))
+        pulse = amplitude * rise * fall
+    else:
+        pulse = amplitude * rise
+        pulse[time_vector > (t_start + flat_duration)] = amplitude
+    return baseline + pulse
+
+def generate_wavy_noise(
+    n_samples,
+    white_noise_level,
+    colored_noise_level,
+    generate_ringing_noise=True,
+    ringing_prob=0.5,
+    max_ringing_bursts=3,  # NEW: max number of bursts per trace
+    ringing_amp_range=(0.05, 0.25),
+    ringing_freq_range=(2, 12),
+    ringing_damp_range=(0.008, 0.025),
+    time_vector=None
+):
+    """Generates noise: white + colored + optional multiple decaying oscillatory (ringing) noises at random locations."""
     white_noise = np.random.normal(0, white_noise_level, n_samples)
     colored_noise_raw = np.random.normal(0, 1, n_samples)
     colored_noise_integrated = np.cumsum(colored_noise_raw)
@@ -154,18 +181,35 @@ def generate_wavy_noise(n_samples, white_noise_level, colored_noise_level):
         colored_noise = colored_noise_normalized * colored_noise_level
     else:
         colored_noise = np.zeros(n_samples)
-    return white_noise + colored_noise
 
+    ringing_noise = np.zeros(n_samples)
+    if generate_ringing_noise and (time_vector is not None) and (np.random.rand() < ringing_prob):
+        n_bursts = np.random.randint(1, max_ringing_bursts+1)
+        for _ in range(n_bursts):
+            amp = np.random.uniform(*ringing_amp_range)
+            freq = np.random.uniform(*ringing_freq_range)
+            phase = np.random.uniform(0, 2*np.pi)
+            damping = np.random.uniform(*ringing_damp_range)
+            t0 = np.random.randint(0, n_samples)
+            ringing = amp * np.exp(-damping * (time_vector - time_vector[t0])) \
+                      * np.sin(2 * np.pi * freq * (time_vector - time_vector[t0]) + phase)
+            ringing[:t0] = 0  # No ringing before t0
+            ringing_noise += ringing
+
+    return white_noise + colored_noise + ringing_noise
 
 def simulate_pulses(
     N_PULSES=5000,
     N_SAMPLES = 4000,
     T_MAX = 2.6,
-    PROB_NORMAL = 0.60,
+    PROB_NORMAL = 0.45,
     PROB_DOUBLE_STEP = 0.20,
     PROB_SLOW_RISER = 0.20,
+    PROB_FLAT_TOP = 0.15,
     WHITE_NOISE_LEVEL = 0.03,
-    COLORED_NOISE_LEVEL = 0.025
+    COLORED_NOISE_LEVEL = 0.025,
+    RINGING_NOISE=False,
+    RINGING_PROB=0.7, RINGING_AMP_RANGE=(0.05, 0.25), RINGING_FREQ_RANGE=(2, 12), RINGING_DAMP_RANGE=(0.008, 0.025)
 ):
 
     """
@@ -182,10 +226,7 @@ def simulate_pulses(
         baseline = np.random.uniform(0, 0.25)
         decay_tau = np.random.uniform(20, 30)
         
-        pulse_type = np.random.choice(
-            ['normal', 'double_step', 'slow_riser'], 
-            p=[PROB_NORMAL, PROB_DOUBLE_STEP, PROB_SLOW_RISER]
-        )
+        pulse_type = np.random.choice(['normal', 'double_step', 'slow_riser', 'flat_top'],p=[PROB_NORMAL, PROB_DOUBLE_STEP, PROB_SLOW_RISER, PROB_FLAT_TOP])
     
         if pulse_type == 'slow_riser':
             # --- Modified: Use a double-sigmoid for a slow initial rise, sharper main rise ---
@@ -223,6 +264,16 @@ def simulate_pulses(
             t_start2 = t_start1 + np.random.uniform(0.1, 0.3)
             steepness2 = np.random.uniform(60, 120)
             clean_pulse = generate_double_step_pulse(time_vector, baseline, amp1, t_start1, steepness1, amp2, t_start2, steepness2, decay_tau)
+        
+        elif pulse_type == 'flat_top':
+            amplitude = np.random.uniform(0.8, 1.0)
+            t_start = np.random.uniform(1.0, 1.1)
+            rise_steepness = np.random.uniform(8, 18)
+            flat_duration = np.random.uniform(0.3, 0.7)
+            # Optionally, add a falling edge:
+            # fall_steepness = np.random.uniform(20, 50)
+            # clean_pulse = generate_flat_top_pulse(time_vector, baseline, amplitude, t_start, rise_steepness, flat_duration, fall_steepness)
+            clean_pulse = generate_flat_top_pulse(time_vector, baseline, amplitude, t_start, rise_steepness, flat_duration)
     
         else: # pulse_type == 'normal'
             # amplitude = np.random.uniform(1.3, 1.5)
@@ -232,7 +283,14 @@ def simulate_pulses(
             steepness = np.random.uniform(8, 18)
             clean_pulse = generate_single_step_pulse(time_vector, baseline, amplitude, t_start, steepness, decay_tau)
             
-        noise = generate_wavy_noise(N_SAMPLES, WHITE_NOISE_LEVEL, COLORED_NOISE_LEVEL)
+        noise = generate_wavy_noise(
+            N_SAMPLES, WHITE_NOISE_LEVEL, COLORED_NOISE_LEVEL, generate_ringing_noise=RINGING_NOISE,
+            ringing_prob=RINGING_PROB,
+            ringing_amp_range=RINGING_AMP_RANGE,
+            ringing_freq_range=RINGING_FREQ_RANGE,
+            ringing_damp_range=RINGING_DAMP_RANGE,
+            time_vector=time_vector
+        )
         
         clean_pulses[i, :] = clean_pulse
         noisy_pulses[i, :] = clean_pulse + noise

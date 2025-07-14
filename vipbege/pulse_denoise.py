@@ -5,8 +5,19 @@ from tensorflow.keras.models import Model
 from tensorflow.keras.regularizers import l2
 from tensorflow.keras.optimizers import Adam
 
+def trapezoidal_filter(pulse, rise, flat):
+    # Create trapezoidal filter kernel
+    kernel = np.concatenate([
+        np.ones(rise),
+        np.zeros(flat),
+        -np.ones(rise)
+    ])
+    kernel = kernel / rise
+    # Apply filter
+    filt = np.convolve(pulse, kernel, mode='same')
+    return filt
 
-def normalize_pulses(pulses, n_baseline=100, trap_rise=100, trap_flat=20):
+def normalize_pulses(pulses, n_baseline=100, trap_rise=300, trap_flat=200, return_amp=False):
     """
     Normalize pulses by:
     1. Subtracting the mean of the first n_baseline samples (baseline subtraction)
@@ -26,29 +37,24 @@ def normalize_pulses(pulses, n_baseline=100, trap_rise=100, trap_flat=20):
     pulses_bs = pulses - baseline
 
     # Step 2: Trapezoidal filter amplitude calculation
-    def trap_filter(pulse):
-        filt = np.zeros_like(pulse)
-        for i in range(trap_rise + trap_flat, len(pulse)):
-            filt[i] = (
-                np.sum(pulse[i-trap_rise-trap_flat:i-trap_flat]) -
-                np.sum(pulse[i-2*trap_rise-trap_flat:i-trap_rise-trap_flat])
-            ) / trap_rise
-        return filt
-
-    amplitudes = np.array([
-        np.max(np.abs(trap_filter(pulse)))
+    filt_pulses = np.array([
+        trapezoidal_filter(pulse, trap_rise, trap_flat)
         for pulse in pulses_bs
     ])
+    # Ignore first few samples to avoid edge effects
+    start = trap_rise + trap_flat
+    amplitudes = np.max(np.abs(filt_pulses[:, start:]), axis=1)
     amplitudes = np.where(amplitudes == 0, 1, amplitudes)  # avoid division by zero
 
     # Step 3: Normalize by amplitude
     pulses_norm = pulses_bs / amplitudes[:, None]
 
-    return pulses_norm
+    if return_amp: return pulses_norm, amplitudes
+    else: return pulses_norm
 
-def normalize_pulse1d(pulse, n_baseline=100, trap_rise=100, trap_flat=20):
+def normalize_pulse1d(pulse, n_baseline=100, trap_rise=300, trap_flat=200, return_amp=False):
     """
-    Normalize a single 1D pulse by:
+    Normalize a single pulse by:
     1. Subtracting the mean of the first n_baseline samples (baseline subtraction)
     2. Calculating amplitude via trapezoidal filter and normalizing by amplitude
 
@@ -57,73 +63,30 @@ def normalize_pulse1d(pulse, n_baseline=100, trap_rise=100, trap_flat=20):
         n_baseline: int, number of samples for baseline calculation
         trap_rise: int, trapezoidal filter rise time (in samples)
         trap_flat: int, trapezoidal filter flat top (in samples)
+        return_amp: bool, whether to return amplitude
 
     Returns:
         pulse_norm: np.ndarray, normalized pulse
+        amplitude: float, (if return_amp=True)
     """
     # Step 1: Baseline subtraction
     baseline = np.mean(pulse[:n_baseline])
     pulse_bs = pulse - baseline
 
     # Step 2: Trapezoidal filter amplitude calculation
-    def trap_filter(pulse):
-        filt = np.zeros_like(pulse)
-        for i in range(trap_rise + trap_flat, len(pulse)):
-            filt[i] = (
-                np.sum(pulse[i-trap_rise-trap_flat:i-trap_flat]) -
-                np.sum(pulse[i-2*trap_rise-trap_flat:i-trap_rise-trap_flat])
-            ) / trap_rise
-        return filt
-
-    filt = trap_filter(pulse_bs)
-    amplitude = np.max(np.abs(filt))
-    amplitude = amplitude if amplitude != 0 else 1  # avoid division by zero
+    filt_pulse = trapezoidal_filter(pulse_bs, trap_rise, trap_flat)
+    start = trap_rise + trap_flat
+    amplitude = np.max(np.abs(filt_pulse[start:]))
+    if amplitude == 0:
+        amplitude = 1  # avoid division by zero
 
     # Step 3: Normalize by amplitude
     pulse_norm = pulse_bs / amplitude
 
-    return pulse_norm
-
-# def normalize_pulses(pulses):
-#     amplitudes = np.max(np.abs(pulses), axis=1, keepdims=True)  # shape: (n_samples, 1)
-#     return pulses / amplitudes, amplitudes
-
-# def normalize_pulses(pulses, mode='normalize', min_val=None, max_val=None):
-#     """
-#     Normalize or denormalize pulses to/from [-1, 1].
-
-#     Parameters:
-#         pulses: np.ndarray, shape (n_pulses, pulse_length)
-#         mode: 'normalize' or 'denormalize'
-#         min_val: float or np.ndarray, minimum value(s) for normalization
-#         max_val: float or np.ndarray, maximum value(s) for normalization
-
-#     Returns:
-#         If mode == 'normalize':
-#             pulses_norm: normalized pulses, shape (n_pulses, pulse_length)
-#             min_val: minimum value(s) used
-#             max_val: maximum value(s) used
-#         If mode == 'denormalize':
-#             pulses_denorm: denormalized pulses, shape (n_pulses, pulse_length)
-#     """
-#     if mode == 'normalize':
-#         # Compute min and max per pulse
-#         min_val = np.min(pulses, axis=1, keepdims=True)
-#         max_val = np.max(pulses, axis=1, keepdims=True)
-#         # Avoid division by zero
-#         denom = np.where(max_val - min_val == 0, 1, max_val - min_val)
-#         pulses_norm = 2 * (pulses - min_val) / denom - 1
-#         return pulses_norm, min_val, max_val
-
-#     elif mode == 'denormalize':
-#         if min_val is None or max_val is None:
-#             raise ValueError("min_val and max_val must be provided for denormalization.")
-#         denom = np.where(max_val - min_val == 0, 1, max_val - min_val)
-#         pulses_denorm = (pulses + 1) / 2 * denom + min_val
-#         return pulses_denorm
-# 
-    # else:
-    #     raise ValueError("mode must be 'normalize' or 'denormalize'.")
+    if return_amp:
+        return pulse_norm, amplitude
+    else:
+        return pulse_norm
 
 def add_noise(pulses, noise_std=0.001, random_seed=None):
     """
@@ -192,3 +155,86 @@ def generate_wavy_noise(n_samples, white_noise_level, colored_noise_level):
     else:
         colored_noise = np.zeros(n_samples)
     return white_noise + colored_noise
+
+
+def simulate_pulses(
+    N_PULSES=5000,
+    N_SAMPLES = 4000,
+    T_MAX = 2.6,
+    PROB_NORMAL = 0.60,
+    PROB_DOUBLE_STEP = 0.20,
+    PROB_SLOW_RISER = 0.20,
+    WHITE_NOISE_LEVEL = 0.03,
+    COLORED_NOISE_LEVEL = 0.025
+):
+
+    """
+    return two pulses, clean and noisy. npdtype array
+    total of 3 type of pulses: normal, double_step, slow_riser
+    """
+    time_vector = np.linspace(0, T_MAX, N_SAMPLES)
+    clean_pulses = np.zeros((N_PULSES, N_SAMPLES))
+    noisy_pulses = np.zeros((N_PULSES, N_SAMPLES))
+    
+    print(f"Generating {N_PULSES} pulses with all 3 types, scaled to the target image...")
+    
+    for i in range(N_PULSES):
+        baseline = np.random.uniform(0, 0.25)
+        decay_tau = np.random.uniform(20, 30)
+        
+        pulse_type = np.random.choice(
+            ['normal', 'double_step', 'slow_riser'], 
+            p=[PROB_NORMAL, PROB_DOUBLE_STEP, PROB_SLOW_RISER]
+        )
+    
+        if pulse_type == 'slow_riser':
+            # --- Modified: Use a double-sigmoid for a slow initial rise, sharper main rise ---
+            # Slow initial rise
+            t_start1 = np.random.uniform(0.85, 1.05)
+            # amp1 = np.random.uniform(0.15, 0.22)
+            steepness1 = np.random.uniform(5, 10)
+            # Main fast rise
+            t_start2 = t_start1 + np.random.uniform(0.12, 0.17)
+            # amp2 = np.random.uniform(1.15, 1.3)
+            while True:
+                amp1 = np.random.uniform(0.005, 0.2)
+                amp2 = np.random.uniform(0.01, 1.0 - amp1)
+                if amp1 + amp2 >= 0.015:
+                    break
+            steepness2 = np.random.uniform(30, 50)
+            clean_pulse = generate_double_step_pulse(
+                time_vector, baseline,
+                amp1, t_start1, steepness1,
+                amp2, t_start2, steepness2,
+                decay_tau
+            )
+    
+        elif pulse_type == 'double_step':
+            # --- Generate a DOUBLE-STEP pulse, correctly scaled ---
+            t_start1 = np.random.uniform(0.8, 1.0)
+            # amp1 = np.random.uniform(0.3, 0.5)
+            # amp2 = np.random.uniform(1.0, 1.2)
+            while True:
+                amp1 = np.random.uniform(0.005, 0.5)
+                amp2 = np.random.uniform(0.01, 1.0 - amp1)
+                if amp1 + amp2 >= 0.015:
+                    break
+            steepness1 = np.random.uniform(20, 50)
+            t_start2 = t_start1 + np.random.uniform(0.1, 0.3)
+            steepness2 = np.random.uniform(60, 120)
+            clean_pulse = generate_double_step_pulse(time_vector, baseline, amp1, t_start1, steepness1, amp2, t_start2, steepness2, decay_tau)
+    
+        else: # pulse_type == 'normal'
+            # amplitude = np.random.uniform(1.3, 1.5)
+            amplitude = np.random.uniform(0.015, 1.0)
+            t_start = np.random.uniform(1.0, 1.1)
+            # steepness = np.random.uniform(70, 150)
+            steepness = np.random.uniform(8, 18)
+            clean_pulse = generate_single_step_pulse(time_vector, baseline, amplitude, t_start, steepness, decay_tau)
+            
+        noise = generate_wavy_noise(N_SAMPLES, WHITE_NOISE_LEVEL, COLORED_NOISE_LEVEL)
+        
+        clean_pulses[i, :] = clean_pulse
+        noisy_pulses[i, :] = clean_pulse + noise
+    print("Generation complete.")
+    return clean_pulses, noisy_pulses

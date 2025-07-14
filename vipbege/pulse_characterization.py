@@ -35,38 +35,36 @@ def find_rise_time(t, pulse, low_frac=0.1, high_frac=0.9, window_length=51, poly
     t_rise = t[idx_high] - t[idx_low]
     return t_rise, t[idx_low], t[idx_high]
 
-# only works for positve pulses
-# def find_rise_time(t, pulse, low_frac=0.1, high_frac=0.9, window_length=100, polyorder=3):
-#     pulse_smooth = savgol_filter(pulse, window_length=window_length, polyorder=polyorder)
-    
-#     max_val = pulse_smooth.max()
-#     low = low_frac * max_val
-#     high = high_frac * max_val
-
-#     idx_low = np.where(pulse_smooth >= low)[0][0]
-#     idx_high = np.where(pulse_smooth >= high)[0][0]
-    
-#     t_rise = t[idx_high] - t[idx_low]
-#     return t_rise, t[idx_low], t[idx_high]
-
 
 def find_decay_time(t, pulse, low_frac=0.1, high_frac=0.9):
 
-    max_val = pulse.max()
-    peak_idx = pulse.argmax()
-    high = high_frac * max_val
-    low = low_frac * max_val
+    # Handle positive or negative pulses
+    if np.abs(pulse.max()) > np.abs(pulse.min()):
+        max_val = pulse.max()
+        peak_idx = pulse.argmax()
+        high = high_frac * max_val
+        low = low_frac * max_val
+        def crossed(x, th): return x <= th
+    else:
+        max_val = pulse.min()
+        peak_idx = pulse.argmin()
+        high = high_frac * max_val
+        low = low_frac * max_val
+        def crossed(x, th): return x >= th
 
-    # Find index after the peak where pulse falls below high
-    idx_high_candidates = np.where(pulse[peak_idx:] <= high)[0]
+    # Find first index after peak where pulse crosses high threshold
+    idx_high_candidates = np.where(crossed(pulse[peak_idx:], high))[0]
     if idx_high_candidates.size == 0:
-        return np.nan, np.nan, np.nan  # Could not find high threshold crossing after peak
+        return np.nan, np.nan, np.nan
     idx_high = idx_high_candidates[0] + peak_idx
 
-    idx_low_candidates = np.where(pulse[idx_high:] <= low)[0]
+    # Find first index after idx_high where pulse crosses low threshold
+    idx_low_candidates = np.where(crossed(pulse[idx_high:], low))[0]
     if idx_low_candidates.size == 0:
         return np.nan, t[idx_high], np.nan
     idx_low = idx_low_candidates[0] + idx_high
+
+    # (Optional) interpolate crossing times for t_high and t_low
 
     t_decay = t[idx_low] - t[idx_high]
     return t_decay, t[idx_high], t[idx_low]
@@ -102,14 +100,6 @@ def within_std(x, value, nbins=400, return_value=False):
         return within_bounds, value
     else:
         return within_bounds
-
-
-def smooth_pulse(pulse, return_deriv=False, **kwargs):
-    smoothed_pulse = savgol_filter(pulse, **kwargs)
-    if return_deriv:
-        return smoothed_pulse, np.gradient(smoothed_pulse)
-    else:
-        return smoothed_pulse
  
 
 def get_peaks(pulse, window_length=100, polyorder=3, deriv=0, prominence=0.3, height=None):
@@ -121,47 +111,6 @@ def get_peaks(pulse, window_length=100, polyorder=3, deriv=0, prominence=0.3, he
 def count_peaks_tot(pulses, **kwargs):
     peak_list = [len(get_peaks(row, **kwargs)[0]) for row in pulses]
     return np.array(peak_list)
-
-def count_peaks_fd_sd(
-    pulse,
-    winlen_pulse=61, poly_pulse=2,
-    winlen_fd=31, poly_fd=2,
-    winlen_sd=31, poly_sd=2,
-    peak_prominence=0.05, peak_height=0.1,
-    get_peaks_func=get_peaks
-):
-    """
-    Returns:
-        n_peaks_fd: Number of peaks in smoothed, normalized 1st derivative of smoothed pulse
-        n_peaks_sd: Number of peaks in smoothed, normalized 2nd derivative of smoothed 1st derivative
-    """
-    if get_peaks_func is None:
-        raise ValueError("You must provide a get_peaks function.")
-
-    # Smooth the original pulse
-    pulse_smoothed = savgol_filter(pulse, window_length=winlen_pulse, polyorder=poly_pulse)
-
-    # 1st derivative of smoothed pulse
-    first_deriv = np.gradient(pulse_smoothed)
-    # Smooth and normalize
-    first_deriv_smooth = savgol_filter(first_deriv, window_length=winlen_fd, polyorder=poly_fd)
-    max_abs_fd = np.max(np.abs(first_deriv_smooth))
-    first_deriv_smooth_norm = first_deriv_smooth / max_abs_fd if max_abs_fd != 0 else first_deriv_smooth
-
-    # Find peaks in 1st derivative
-    peaks_fd, _ = get_peaks_func(first_deriv_smooth_norm, prominence=peak_prominence, height=peak_height)
-
-    # 2nd derivative of smoothed 1st derivative
-    second_deriv = np.gradient(first_deriv_smooth)
-    # Smooth and normalize
-    second_deriv_smooth = savgol_filter(second_deriv, window_length=winlen_sd, polyorder=poly_sd)
-    max_abs_sd = np.max(np.abs(second_deriv_smooth))
-    second_deriv_smooth_norm = second_deriv_smooth / max_abs_sd if max_abs_sd != 0 else second_deriv_smooth
-
-    # Find peaks in 2nd derivative
-    peaks_sd, _ = get_peaks_func(second_deriv_smooth_norm, prominence=peak_prominence, height=peak_height)
-
-    return len(peaks_fd), len(peaks_sd)
 
 
 def mean_pulse(pulses):
@@ -200,106 +149,210 @@ def l1_norm_to_mean(pulse, reference_pulse, t=None):
     l1_norm = np.sum(np.abs(np.asarray(pulse_aligned) - np.asarray(ref_aligned)))
     return l1_norm
 
-# def l1_norm_to_mean(pulse, reference_pulse):
-#     """
-#     Computes the L1 norm between each pulse and the mean pulse.
-
-#     Parameters:
-#         pulses: 2D numpy array of shape (n_samples, n_time)
-
-#     Returns:
-#         l1_norms: 1D numpy array of shape (n_samples,)
-#     """
-#     # Compute L1 norm for each pulse
-#     l1_norms = np.sum(np.abs(np.asarray(pulse) - np.asarray(reference_pulse)))
-#     return l1_norms
-
-
-def peak_normalize(data):
-    """
-    Normalizes each pulse (row) in the dataset to the [0, 1] range.
-    """
-    # Find the min and max for each pulse (row)
-    X_min = data.min(axis=1, keepdims=True)
-    X_max = data.max(axis=1, keepdims=True)
-    
-    # Calculate the range, adding a small epsilon to avoid division by zero for flat lines
-    pulse_range = X_max - X_min
-    epsilon = 1e-10
-    
-    # Perform the normalization
-    normalized_data = (data - X_min) / (pulse_range + epsilon)
-    
-    return normalized_data
 
 
 # --------- below is specifically for 2021-type waveform -----------------------
-def find_LR_crossings_derivative(t, pulse, L=0.9, R=0.9, window_length=100, polyorder=3):
-    """
-    Find the times where the Savitzky-Golay smoothed derivative of the pulse crosses
-    L% and R% of its maximum value (on the rising and falling edges around the main peak).
+def find_LR_crossings_derivative(
+    t, pulse, L=0.9, R=0.9, window_length=51, polyorder=3, height=0.4, prominence=0.43
+):
 
-    Parameters:
-        t : array-like
-            Time array (same length as pulse)
-        pulse : array-like
-            Original pulse signal
-        L : float
-            Fraction (e.g., 0.1 for 10%)
-        R : float
-            Fraction (e.g., 0.9 for 90%)
-        window_length : int
-            Window length for Savitzky-Golay filter (must be odd)
-        polyorder : int
-            Polynomial order for Savitzky-Golay filter
-
-    Returns:
-        peak_time : float
-            Time of the max derivative
-        t_L : float
-            Time where derivative first crosses L% of peak (on rising edge)
-        t_R : float
-            Time where derivative falls to R% of peak (on falling edge)
-        deriv_norm : array
-            The normalized derivative (for plotting if desired)
     """
-    # Compute smoothed derivative
+    calculate L% from the left and R% from the right of the peak/peaks
+    return
+    peak_times: a list of where the peaks are located
+    t_L time L% from the left
+    t_R time L% from the right
+    deriv_norm normalized derivative from to 1, normalized by amplitude
+    """
     deriv = savgol_filter(pulse, window_length=window_length, polyorder=polyorder, deriv=1)
-    # Normalize
-    deriv_norm = (deriv - np.min(deriv)) / (np.max(deriv) - np.min(deriv)) if np.max(deriv) != np.min(deriv) else deriv * 0
-
-    # Find peak
-    peak_idx = np.argmax(deriv_norm)
-    peak_val = deriv_norm[peak_idx]
-    peak_time = t[peak_idx]
-
-    # L% and R% of peak value
-    L_val = L * peak_val
-    R_val = R * peak_val
-
-    # Rising edge: from start to peak, find first crossing >= L_val
-    left_idx = np.where(deriv_norm[:peak_idx] >= L_val)[0]
-    t_L = t[left_idx[0]] if len(left_idx) > 0 else t[0]
-
-    # Falling edge: from peak to end, find first crossing <= R_val
-    right_idx = np.where(deriv_norm[peak_idx:] <= R_val)[0]
-    t_R = t[peak_idx + right_idx[0]] if len(right_idx) > 0 else t[-1]
-
-    return peak_time, t_L, t_R, deriv_norm
-
-def find_amplitudes(pulse, window_length=100, polyorder=3):
-    """
-    Smooth each row of a 2D array and return the max of each smoothed row.
     
-    Parameters:
-        pulse: np.ndarray, shape (n_rows, n_cols)
-        window_length: int, window size for smoothing (must be odd and <= n_cols)
-        polyorder: int, polynomial order for Savitzky-Golay filter
-        
-    Returns:
-        amplitudes: np.ndarray, shape (n_rows,)
+    max_abs = np.max(np.abs(deriv))
+    if max_abs == 0:
+        deriv_norm = deriv * 0
+    else:
+        deriv_norm = deriv / max_abs
+    
+    peaks, _ = find_peaks(np.abs(deriv_norm), height=height, prominence=prominence)
+    
+    if len(peaks) == 0:
+        print('no peaks found')
+        return [], None, None, deriv_norm
+
+    peak_times = [t[p] for p in peaks]
+    
+    # Get sign from the largest peak in normalized derivative
+    largest_peak_idx = peaks[np.argmax(np.abs(deriv_norm[peaks]))]
+    sign = np.sign(deriv_norm[largest_peak_idx]) if deriv_norm[largest_peak_idx] != 0 else 1
+
+    # t_L: L% up to the first peak (using normalized by largest peak)
+    L_val = L * sign
+    first_peak_idx = peaks[0]
+    left = deriv_norm[:first_peak_idx+1]
+    left_cross = np.where(sign * left >= sign * L_val)[0]
+    if len(left_cross) == 0:
+        t_L = t[0]
+    else:
+        idx_L = left_cross[0]
+        if idx_L == 0:
+            t_L = t[idx_L]
+        else:
+            x0, x1 = t[idx_L-1], t[idx_L]
+            y0, y1 = left[idx_L-1], left[idx_L]
+            t_L = x0 + (L_val - y0) * (x1 - x0) / (y1 - y0)
+
+    # t_R: R% down from the last peak (using normalized by largest peak)
+    R_val = R * sign
+    last_peak_idx = peaks[-1]
+    right = deriv_norm[last_peak_idx:]
+    right_cross = np.where(sign * right <= sign * R_val)[0]
+    if len(right_cross) == 0:
+        t_R = t[-1]
+    else:
+        idx_R = right_cross[0]
+        if idx_R == 0:
+            t_R = t[last_peak_idx + idx_R]
+        else:
+            x0, x1 = t[last_peak_idx + idx_R - 1], t[last_peak_idx + idx_R]
+            y0, y1 = right[idx_R-1], right[idx_R]
+            t_R = x0 + (R_val - y0) * (x1 - x0) / (y1 - y0)
+
+    return peak_times, t_L, t_R, deriv_norm
+
+# def find_LR_crossings_derivative(
+#     t, pulse, L=0.9, R=0.9, window_length=51, polyorder=3
+# ):
+#     """
+#     Find the times where the Savitzky-Golay smoothed derivative of the pulse crosses
+#     L% and R% of its main peak value (on the rising and falling edges around the main peak).
+#     Handles both positive and negative pulses, with linear interpolation for accuracy.
+
+#     Returns:
+#         peak_time : float
+#             Time of the main derivative peak
+#         t_L : float
+#             Time where derivative first crosses L% of main peak
+#         t_R : float
+#             Time where derivative first crosses R% of main peak
+#         deriv_norm : array
+#             The normalized derivative (for plotting if desired)
+#     """
+#     # Smooth and differentiate
+#     deriv = savgol_filter(pulse, window_length=window_length, polyorder=polyorder, deriv=1)
+
+#     # Find main peak (positive or negative)
+#     peak_idx = np.argmax(np.abs(deriv))
+#     peak_val = deriv[peak_idx]
+#     sign = np.sign(peak_val) if peak_val != 0 else 1
+
+#     # Normalize so main peak is always +1 or -1
+#     deriv_norm = deriv / peak_val if peak_val != 0 else deriv * 0
+
+#     # L/R values (on the same side as the main peak)
+#     L_val = L * sign
+#     R_val = R * sign
+
+#     # Find L% crossing before peak (rising edge)
+#     left = deriv_norm[:peak_idx+1]
+#     left_cross = np.where(sign * left >= sign * L_val)[0]
+#     if len(left_cross) == 0:
+#         t_L = t[0]
+#     else:
+#         idx_L = left_cross[0]
+#         if idx_L == 0:
+#             t_L = t[idx_L]
+#         else:
+#             # Linear interpolation
+#             x0, x1 = t[idx_L-1], t[idx_L]
+#             y0, y1 = left[idx_L-1], left[idx_L]
+#             t_L = x0 + (L_val - y0) * (x1 - x0) / (y1 - y0)
+
+#     # Find R% crossing after peak (falling edge)
+#     right = deriv_norm[peak_idx:]
+#     right_cross = np.where(sign * right <= sign * R_val)[0]
+#     if len(right_cross) == 0:
+#         t_R = t[-1]
+#     else:
+#         idx_R = right_cross[0]
+#         if idx_R == 0:
+#             t_R = t[peak_idx + idx_R]
+#         else:
+#             # Linear interpolation
+#             x0, x1 = t[peak_idx + idx_R - 1], t[peak_idx + idx_R]
+#             y0, y1 = right[idx_R-1], right[idx_R]
+#             t_R = x0 + (R_val - y0) * (x1 - x0) / (y1 - y0)
+
+#     peak_time = t[peak_idx]
+
+#     return peak_time, t_L, t_R, deriv_norm
+
+
+def trapezoidal_filter(pulse, rise, flat):
+    # Create trapezoidal filter kernel
+    kernel = np.concatenate([
+        np.ones(rise),
+        np.zeros(flat),
+        -np.ones(rise)
+    ])
+    kernel = kernel / rise
+    # Apply filter
+    filt = np.convolve(pulse, kernel, mode='same')
+    return filt
+
+def find_amplitudes(pulses, n_baseline=100, trap_rise=300, trap_flat=200):
     """
-    # Smooth each row and find max
-    smoothed = savgol_filter(pulse, window_length=window_length, polyorder=polyorder, axis=1)
-    amplitudes = np.max(smoothed, axis=1) - np.min(smoothed, axis=1)
+    Normalize pulses by:
+    1. Subtracting the mean of the first n_baseline samples (baseline subtraction)
+    2. Calculating amplitude via trapezoidal filter amplitude
+
+    Parameters:
+        pulses: np.ndarray, shape (n_pulses, pulse_length)
+        n_baseline: int, number of samples for baseline calculation
+        trap_rise: int, trapezoidal filter rise time (in samples) (current value for 2025, 120 for 2021)
+        trap_flat: int, trapezoidal filter flat top (in samples) (current value for 2025, 400 for 2021)
+
+    Returns:
+        amplitudes: np.ndarray, amplitudes
+    """
+    # Step 1: Baseline subtraction
+    baseline = np.mean(pulses[:, :n_baseline], axis=1, keepdims=True)
+    pulses_bs = pulses - baseline
+
+    # Step 2: Trapezoidal filter amplitude calculation
+    filt_pulses = np.array([
+        trapezoidal_filter(pulse, trap_rise, trap_flat)
+        for pulse in pulses_bs
+    ])
+    # Ignore first few samples to avoid edge effects
+    start = trap_rise + trap_flat
+    amplitudes = np.max(np.abs(filt_pulses[:, start:]), axis=1)
+    amplitudes = np.where(amplitudes == 0, 1, amplitudes)  # avoid division by zero
+
     return amplitudes
+
+def normalize_deriv(pulse, window_length=51, polyorder=3):
+    """
+    Normalize derivative of pulse(s).
+    If input is 2D (n_samples, n_points), returns array of same shape.
+    """
+    # Smooth and differentiate
+    deriv = savgol_filter(pulse, window_length=window_length, polyorder=polyorder, deriv=1)
+
+    # If 1D input, expand dims to make code below work
+    if deriv.ndim == 1:
+        deriv = deriv[None, :]  # shape (1, n_points)
+
+    # Find main peak for each sample
+    peak_idx = np.argmax(np.abs(deriv), axis=1)  # shape: (n_samples,)
+    peak_val = np.array([deriv[i, idx] for i, idx in enumerate(peak_idx)])  # shape: (n_samples,)
+
+    # Avoid division by zero
+    peak_val[peak_val == 0] = 1
+
+    # Normalize so main peak is always +1 or -1
+    deriv_norm = deriv / peak_val[:, None]
+
+    # If input was 1D, return 1D
+    if pulse.ndim == 1:
+        deriv_norm = deriv_norm[0]
+
+    return deriv_norm

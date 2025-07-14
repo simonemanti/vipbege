@@ -102,30 +102,30 @@ def add_noise(pulses, noise_std=0.001, random_seed=None):
     return pulses + noise
 
 
-def build_recon_autoencoder(input_shape=(924, 1), lr=1e-4):
-    inputs = Input(shape=input_shape)
-    x = Conv1D(64, 16, activation='relu', padding='same')(inputs)
-    x = MaxPooling1D(2, padding='same')(x)      # 924 -> 462
-    x = Conv1D(32, 8, activation='relu', padding='same')(x)
-    x = MaxPooling1D(2, padding='same')(x)      # 462 -> 231
-    x = Conv1D(16, 4, activation='relu', padding='same')(x)
-    encoded = MaxPooling1D(2, padding='same')(x) # 231 -> 116
+# def build_recon_autoencoder(input_shape=(924, 1), lr=1e-4):
+#     inputs = Input(shape=input_shape)
+#     x = Conv1D(64, 16, activation='relu', padding='same')(inputs)
+#     x = MaxPooling1D(2, padding='same')(x)      # 924 -> 462
+#     x = Conv1D(32, 8, activation='relu', padding='same')(x)
+#     x = MaxPooling1D(2, padding='same')(x)      # 462 -> 231
+#     x = Conv1D(16, 4, activation='relu', padding='same')(x)
+#     encoded = MaxPooling1D(2, padding='same')(x) # 231 -> 116
 
-    x = Conv1D(16, 4, activation='relu', padding='same')(encoded)
-    x = UpSampling1D(2)(x)                      # 116 -> 232
-    x = Conv1D(32, 8, activation='relu', padding='same')(x)
-    x = UpSampling1D(2)(x)                      # 232 -> 464
-    x = Conv1D(64, 16, activation='relu', padding='same')(x)
-    x = UpSampling1D(2)(x)                      # 464 -> 928
+#     x = Conv1D(16, 4, activation='relu', padding='same')(encoded)
+#     x = UpSampling1D(2)(x)                      # 116 -> 232
+#     x = Conv1D(32, 8, activation='relu', padding='same')(x)
+#     x = UpSampling1D(2)(x)                      # 232 -> 464
+#     x = Conv1D(64, 16, activation='relu', padding='same')(x)
+#     x = UpSampling1D(2)(x)                      # 464 -> 928
 
-    # Crop 2 from start and 2 from end: 928 -> 924
-    x = Cropping1D((2, 2))(x)
+#     # Crop 2 from start and 2 from end: 928 -> 924
+#     x = Cropping1D((2, 2))(x)
 
-    decoded = Conv1D(1, 3, activation='linear', padding='same')(x)
+#     decoded = Conv1D(1, 3, activation='linear', padding='same')(x)
 
-    autoencoder = Model(inputs, decoded)
-    autoencoder.compile(optimizer=Adam(lr), loss='mae')
-    return autoencoder
+#     autoencoder = Model(inputs, decoded)
+#     autoencoder.compile(optimizer=Adam(lr), loss='mae')
+#     return autoencoder
 
 
 # -------------- pulse simulation -----------------------------

@@ -3,6 +3,7 @@ import numpy as np
 from scipy.signal import savgol_filter
 
 class Pulse:
+
     def __init__(self, data: np.ndarray, sampling_rate: float = 400e6, label: str = None):
         """
         :param data: 1D numpy array representing the pulse data
@@ -54,3 +55,43 @@ class Pulse:
         t_rise = self.time[idx_high] - self.time[idx_low]
         
         return t_rise, self.time[idx_low], self.time[idx_high]
+
+    def find_decay_time(self, low_frac: float = 0.1, high_frac: float = 0.9):
+        """
+        :param low_frac: Lower threshold fraction (default: 0.1)
+        :param high_frac: Upper threshold fraction (default: 0.9)
+        """
+        # Handle positive or negative pulses
+        if np.abs(self.data.max()) > np.abs(self.data.min()):
+            max_val = self.data.max()
+            peak_idx = self.data.argmax()
+            high = high_frac * max_val
+            low = low_frac * max_val
+            def crossed(x, th): return x <= th
+        else:
+            max_val = self.data.min()
+            peak_idx = self.data.argmin()
+            high = high_frac * max_val
+            low = low_frac * max_val
+            def crossed(x, th): return x >= th
+        
+        # Find first index after peak where pulse crosses high threshold
+        idx_high_candidates = np.where(crossed(self.data[peak_idx:], high))[0]
+        if idx_high_candidates.size == 0:
+            return np.nan, np.nan, np.nan
+        idx_high = idx_high_candidates[0] + peak_idx
+        
+        # Find first index after idx_high where pulse crosses low threshold
+        idx_low_candidates = np.where(crossed(self.data[idx_high:], low))[0]
+        if idx_low_candidates.size == 0:
+            return np.nan, self.time[idx_high], np.nan
+        idx_low = idx_low_candidates[0] + idx_high
+        
+        t_decay = self.time[idx_low] - self.time[idx_high]
+        return t_decay, self.time[idx_high], self.time[idx_low]
+    
+    def find_peak_time(self):
+        pass
+
+    def calculate_area(self):
+        pass

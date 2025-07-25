@@ -1,5 +1,14 @@
 import numpy as np
 
+import os, sys
+
+p = os.path.abspath('/global/homes/j/jasonip/QG_tesing/vipbege')
+if p not in sys.path:
+    sys.path.append(p)
+
+from importlib import reload
+import vipbege.pulse
+reload(vipbege.pulse)
 from vipbege.pulse import Pulse
 
 def test_pulse():

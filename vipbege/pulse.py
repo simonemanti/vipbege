@@ -243,6 +243,12 @@ class Pulse:
             t_R = t_R_deriv
 
         interval = t_R - t_L
+        if t_L >= t_R or interval <= 0:
+            # Mark as invalid
+            if return_norm:
+                return np.nan, np.nan, np.nan, deriv_norm
+            else:
+                return np.nan, np.nan, np.nan
         if return_norm:
             return abs(interval), t_L, t_R, deriv_norm
         else:

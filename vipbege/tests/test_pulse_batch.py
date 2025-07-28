@@ -2,7 +2,7 @@ import numpy as np
 
 import os, sys
 
-p = os.path.abspath('/global/homes/j/jasonip/QG_tesing/vipbege')
+p = os.path.abspath('vipbege')
 if p not in sys.path:
     sys.path.append(p)
 

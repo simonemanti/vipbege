@@ -2,6 +2,20 @@
 
 This package provides tools for feature extraction of pulses in the **VIP experiment**.
 
+## Requirements
+
+This project requires the following Python packages:
+
+- numpy
+- scipy
+- pandas
+
+You can install them with:
+
+```
+pip install numpy scipy pandas
+```
+
 ## Contents
 
 - **`pulse.py`**

@@ -23,6 +23,7 @@ pip install numpy scipy pandas
 - **`pulse_batch.py`**
   - Contains the `PulseBatch` class for performing feature extraction on batches of pulses.
   - Includes a `PulseGenerator` for generating pulses within batch processing.
+  - Includes a `DataParser` class to access .BIN files and convert into Pandas dataframe.
 - **`demo.ipynb`**
   - A demonstration notebook showing how to use the provided classes for feature extraction.
 

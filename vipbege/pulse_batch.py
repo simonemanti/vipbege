@@ -661,7 +661,7 @@ class DataParser:
         Example
         -------
         parser = DataParser(header_file="file.BIN")
-        df = parser.save_channel_events(folder="data", channel=0, save_df=False)
+        df = parser.save_events(folder="data", channel=0, save_df=False)
         """
         self.header_file = header_file
         self.header_bits = self.get_caen_header_bits(header_file)

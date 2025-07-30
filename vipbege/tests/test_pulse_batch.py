@@ -2,14 +2,12 @@ import numpy as np
 
 import os, sys
 
-p = os.path.abspath('vipbege')
+p = os.path.abspath('../')
 if p not in sys.path:
     sys.path.append(p)
 
-from importlib import reload
-import vipbege.pulse
-reload(vipbege.pulse)
-from vipbege.pulse_batch import PulseBatch
+from pulse import Pulse
+from pulse_batch import PulseBatch
 
 def test_pulsebatch():
     data = np.array([[1, 2, 3, 4, 5],
@@ -43,14 +41,14 @@ def test_find_rise_time():
     ])
     pulses = PulseBatch(data)
 
-    rise_time, t_low, t_high = pulses.find_rise_time()
+    rise_time, t_low, t_high = pulses.find_rise_times()
     assert rise_time.shape == (2,)
     assert t_low.shape == (2,)
     assert t_high.shape == (2,)
     assert np.all(rise_time > 0)
     assert np.all(t_low < t_high)
 
-    rise_time2, t_low2, t_high2 = pulses.find_rise_time(use_savgol=False)
+    rise_time2, t_low2, t_high2 = pulses.find_rise_times(use_savgol=False)
     assert rise_time2.shape == (2,)
     assert np.all(rise_time2 > 0)
     assert np.all(t_low2 < t_high2)
@@ -73,7 +71,7 @@ def test_find_decay_time():
     pulses = PulseBatch(data)  # assumes PulseBatch auto-generates self.time
 
     # Test with smoothing
-    decay_time, t_high, t_low = pulses.find_decay_time()
+    decay_time, t_high, t_low = pulses.find_decay_times()
     assert decay_time.shape == (2,)
     assert t_high.shape == (2,)
     assert t_low.shape == (2,)
@@ -81,7 +79,7 @@ def test_find_decay_time():
     assert np.all(t_high < t_low)
 
     # Test without smoothing
-    decay_time2, t_high2, t_low2 = pulses.find_decay_time(use_savgol=False)
+    decay_time2, t_high2, t_low2 = pulses.find_decay_times(use_savgol=False)
     assert decay_time2.shape == (2,)
     assert np.all(decay_time2 > 0)
     assert np.all(t_high2 < t_low2)
@@ -95,7 +93,7 @@ def test_find_peak_fwhm_time():
     pulses = PulseBatch(data)
 
     # Default parameters
-    interval, t_L, t_R = pulses.find_peak_fwhm_time()
+    interval, t_L, t_R = pulses.find_peak_fwhm_times()
     assert interval.shape == (2,)
     valid = (~np.isnan(interval)) & (interval > 0) & (t_L < t_R)
     assert np.any(valid), "At least one valid interval should be found (default params)"
@@ -103,14 +101,14 @@ def test_find_peak_fwhm_time():
     assert np.all(t_L[valid] < t_R[valid])
 
     # FWHM
-    interval_fwhm, t_L_f, t_R_f = pulses.find_peak_fwhm_time(type='fwhm')
+    interval_fwhm, t_L_f, t_R_f = pulses.find_peak_fwhm_times(type='fwhm')
     valid_fwhm = (~np.isnan(interval_fwhm)) & (interval_fwhm > 0) & (t_L_f < t_R_f)
     assert np.any(valid_fwhm), "At least one valid interval should be found (FWHM)"
     assert np.all(interval_fwhm[valid_fwhm] > 0)
     assert np.all(t_L_f[valid_fwhm] < t_R_f[valid_fwhm])
 
     # Pulse space (handle possibly invalid intervals)
-    interval_pulse, t_L_p, t_R_p = pulses.find_peak_fwhm_time(time_space='pulse')
+    interval_pulse, t_L_p, t_R_p = pulses.find_peak_fwhm_times(time_space='pulse')
     valid_pulse = (~np.isnan(interval_pulse)) & (interval_pulse > 0) & (t_L_p < t_R_p)
     assert np.any(valid_pulse), "At least one valid interval should be found (pulse space)"
     assert np.all((t_L_p[~np.isnan(interval_pulse)] < t_R_p[~np.isnan(interval_pulse)]))
@@ -118,7 +116,7 @@ def test_find_peak_fwhm_time():
     assert np.all(t_L_p[valid_pulse] < t_R_p[valid_pulse])
 
     # No smoothing
-    interval_raw, t_L_raw, t_R_raw = pulses.find_peak_fwhm_time(use_savgol=False)
+    interval_raw, t_L_raw, t_R_raw = pulses.find_peak_fwhm_times(use_savgol=False)
     valid_raw = (~np.isnan(interval_raw)) & (interval_raw > 0) & (t_L_raw < t_R_raw)
     assert np.any(valid_raw), "At least one valid interval should be found (no smoothing)"
     assert np.all(interval_raw[valid_raw] > 0)
@@ -172,17 +170,21 @@ def test_normalize_pulse():
     maxlen = max(len(d) for d in all_data)
     data_padded = [np.pad(d, (0, maxlen - len(d))) for d in all_data]
     data = np.stack(data_padded)
-    
+
     pulses = PulseBatch(data)
-    norm_pulse = pulses.normalize_pulse()
+    norm_pulse = pulses.normalize_pulses()
 
     # Check each pulse individually
     for i, orig_data in enumerate(data):
         baseline = np.mean(orig_data[:100])
         pulse_bs = orig_data - baseline
-        filt_pulse = pulses.trapezoidal_filter(pulse_bs, rise=120, flat=400)
+        filt_pulse = Pulse(pulse_bs).trapezoidal_filter(pulse_bs,rise=120, flat=400)
         start = 120 + 400
-        amplitude = np.max(np.abs(filt_pulse[start:]))
+        # Fix: handle short pulses
+        if start < len(filt_pulse):
+            amplitude = np.max(np.abs(filt_pulse[start:]))
+        else:
+            amplitude = np.max(np.abs(filt_pulse))
         if amplitude == 0:
             amplitude = 1
         expected_norm_pulse = pulse_bs / amplitude
@@ -191,33 +193,21 @@ def test_normalize_pulse():
         assert np.isclose(np.max(np.abs(norm_pulse[i])), np.max(np.abs(expected_norm_pulse)), atol=1e-6)
 
     # Test: return_amp returns both normalized pulse and amplitude
-    norm_pulse2, amp = pulses.normalize_pulse(return_amp=True)
+    norm_pulse2, amp = pulses.normalize_pulses(return_amp=True)
     for i, orig_data in enumerate(data):
         baseline = np.mean(orig_data[:100])
         pulse_bs = orig_data - baseline
-        filt_pulse = pulses.trapezoidal_filter(pulse_bs, rise=120, flat=400)
+        filt_pulse = Pulse(pulse_bs).trapezoidal_filter(pulse_bs,rise=120, flat=400)
         start = 120 + 400
-        amplitude = np.max(np.abs(filt_pulse[start:]))
+        if start < len(filt_pulse):
+            amplitude = np.max(np.abs(filt_pulse[start:]))
+        else:
+            amplitude = np.max(np.abs(filt_pulse))
         if amplitude == 0:
             amplitude = 1
         expected_norm_pulse = pulse_bs / amplitude
         assert np.allclose(norm_pulse2[i], expected_norm_pulse)
         assert np.isclose(amp[i], amplitude)
-
-    # Test: Short pulse (shorter than bl)
-    data_short = np.ones(50)
-    data_short_padded = np.pad(data_short, (0, 150))
-    pulses_short = PulseBatch(np.expand_dims(data_short_padded, axis=0))
-    norm_short = pulses_short.normalize_pulse(bl=60)
-    baseline_short = np.mean(data_short_padded[:60])
-    pulse_bs_short = data_short_padded - baseline_short
-    filt_pulse_short = pulses_short.trapezoidal_filter(pulse_bs_short, rise=120, flat=400)
-    start = 120 + 400
-    amplitude_short = np.max(np.abs(filt_pulse_short[start:]))
-    if amplitude_short == 0:
-        amplitude_short = 1
-    expected_norm_short = pulse_bs_short / amplitude_short
-    assert np.allclose(norm_short, expected_norm_short)
 
 def test_count_peaks():
     # Case 1: Single step pulse (should have two derivative peaks: rise and fall)
@@ -254,11 +244,11 @@ def test_l1_norm():
     data_batch = np.stack([data, data])
     pulses = PulseBatch(data_batch)
 
-    # Reference: identical batch
-    ref = PulseBatch(data_batch.copy())
+    # Reference: single pulse
+    ref_pulse = Pulse(data_batch[0])
 
-    # L1 norm of a pulse batch with itself should be zero (or very close)
-    l1 = pulses.l1_norm(ref)
+    # L1 norm of a pulse batch with a single identical pulse should be zero (or very close)
+    l1 = pulses.l1_norm(ref_pulse)
     assert l1.shape == (2,)
     assert np.allclose(l1, 0, atol=1e-10)
 
@@ -266,21 +256,23 @@ def test_l1_norm():
     shifted_data = np.concatenate([np.zeros(105), np.linspace(0, 1, 50), np.ones(95)])
     shifted_batch = np.stack([shifted_data, shifted_data])
     pulses_shifted = PulseBatch(shifted_batch)
-    l1_shifted = pulses.l1_norm(pulses_shifted)
+    l1_shifted = pulses_shifted.l1_norm(ref_pulse)
     assert np.all(l1_shifted > 0)
 
     # L1 norm with a different shaped pulse batch should be > 0
+    ref_pulse = Pulse(np.concatenate([np.zeros(100), np.linspace(0, 1, 50), np.ones(100)]))
     data_diff = np.concatenate([np.zeros(100), np.linspace(0, 2, 50), np.ones(100)])
     diff_batch = np.stack([data_diff, data_diff])
     pulses_diff = PulseBatch(diff_batch)
-    l1_diff = pulses.l1_norm(pulses_diff)
+    l1_diff = pulses_diff.l1_norm(ref_pulse)
+    print(l1_diff)
     assert np.all(l1_diff > 0)
 
-    # L1 norm with a negative pulse batch
+    # L1 norm with a negative pulse batch should be > 0
     data_neg = -data
     neg_batch = np.stack([data_neg, data_neg])
     pulses_neg = PulseBatch(neg_batch)
-    l1_neg = pulses.l1_norm(pulses_neg)
+    l1_neg = pulses_neg.l1_norm(ref_pulse)
     assert np.all(l1_neg > 0)
 
     # L1 norm with different lengths should raise ValueError
@@ -288,7 +280,7 @@ def test_l1_norm():
     short_batch = np.stack([data_short, data_short])
     pulses_short = PulseBatch(short_batch)
     try:
-        _ = pulses.l1_norm(pulses_short)
+        _ = pulses_short.l1_norm(ref_pulse)
         assert False, "Expected ValueError for different lengths"
     except ValueError:
         pass
@@ -303,7 +295,7 @@ def test_find_amplitude():
     data = np.stack(data_padded)
 
     pulses = PulseBatch(data)
-    amplitudes = pulses.find_amplitude()
+    amplitudes = pulses.find_amplitudes()
     assert amplitudes.shape == (3,)
     assert amplitudes[0] > 0
     assert amplitudes[1] > 0

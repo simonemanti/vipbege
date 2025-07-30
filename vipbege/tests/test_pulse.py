@@ -2,14 +2,14 @@ import numpy as np
 
 import os, sys
 
-p = os.path.abspath('vipbege')
+p = os.path.abspath('../')
 if p not in sys.path:
     sys.path.append(p)
 
 from importlib import reload
-import vipbege.pulse
-reload(vipbege.pulse)
-from vipbege.pulse import Pulse
+import pulse
+reload(pulse)
+from pulse import Pulse
 
 def test_pulse():
     # Test with default sampling rate

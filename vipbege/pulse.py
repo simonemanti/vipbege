@@ -179,7 +179,10 @@ class Pulse:
         peaks, _ = find_peaks(np.abs(deriv_norm), height=height, prominence=prominence)
         if len(peaks) == 0:
             print('no peaks found')
-            return None, None, None
+            if return_norm:
+                return None, None, None, None
+            else:
+                return None, None, None
 
         # Use sign of largest peak in normalized derivative
         largest_peak_idx = peaks[np.argmax(np.abs(deriv_norm[peaks]))]
@@ -323,6 +326,9 @@ class Pulse:
         """
         :param reference_pulse: an object that contains pulse (.data) and time (.time)
         """
+        if not hasattr(reference_pulse, 'normalize_pulse'):
+            raise TypeError("reference_pulse must be a single Pulse object")
+        
         # Normalize both pulses
         pulse_norm = self.normalize_pulse()
         ref_norm = reference_pulse.normalize_pulse()

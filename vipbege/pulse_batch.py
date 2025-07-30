@@ -6,6 +6,7 @@ import os
 import glob
 import math
 import pandas as pd
+from pulse import Pulse
 
 
 class PulseBatch:
@@ -28,404 +29,171 @@ class PulseBatch:
         dt = 1 / sampling_rate
         self.time = np.arange(n_channels) * dt * 1e6
 
-    def find_rise_time(self, low_frac: float = 0.1, high_frac: float = 0.9, 
-                    use_savgol: bool = True, window_length: int = 51, polyorder: int = 3):
+    def find_rise_times(self, **kwargs):
         """
-        Calculate the rise time for each pulse (time from low_frac to high_frac of the amplitude).
-        :return: (t_rise, t_low, t_high) -- each is an array of shape (n_pulse,)
+        Compute rise times for all pulses in the batch.
+        Returns:
+            rise_times: np.ndarray of shape (n_pulses,)
+            t_lows: np.ndarray of shape (n_pulses,)
+            t_highs: np.ndarray of shape (n_pulses,)
         """
-        pulses = self.data           # shape: (n_pulse, n_samples)
-        t = self.time                # shape: (n_samples,)
+        rise_times = []
+        t_lows = []
+        t_highs = []
 
-        n_pulse, n_samples = pulses.shape
+        for i in range(self.data.shape[0]):
+            pulse = Pulse(self.data[i], self.sampling_rate)
+            t_rise, t_low, t_high = pulse.find_rise_time(**kwargs)
+            rise_times.append(t_rise)
+            t_lows.append(t_low)
+            t_highs.append(t_high)
 
-        # Smoothing
-        if use_savgol:
-            pulses_smooth = np.array([
-                savgol_filter(pulse, window_length=window_length, polyorder=polyorder)
-                for pulse in pulses
-            ])
-        else:
-            pulses_smooth = pulses
-
-        baselines = np.median(pulses_smooth[:, :100], axis=1)  # shape: (n_pulse,)
-
-        max_vals = np.max(pulses_smooth, axis=1)
-        min_vals = np.min(pulses_smooth, axis=1)
-
-        t_rise = np.full(n_pulse, np.nan)
-        t_low = np.full(n_pulse, np.nan)
-        t_high = np.full(n_pulse, np.nan)
-
-        for i in range(n_pulse):
-            pulse = pulses_smooth[i]
-            baseline = baselines[i]
-            max_val = max_vals[i]
-            min_val = min_vals[i]
-            if abs(max_val - baseline) > abs(min_val - baseline):
-                # Positive pulse
-                peak = max_val
-                low_level = baseline + low_frac * (peak - baseline)
-                high_level = baseline + high_frac * (peak - baseline)
-                crossing_indices = np.where(pulse > low_level)[0]
-                if len(crossing_indices) == 0:
-                    continue  # leave as nan
-                idx_low = crossing_indices[0]
-                crossing_indices = np.where(pulse > high_level)[0]
-                crossing_indices = crossing_indices[crossing_indices > idx_low]
-                if len(crossing_indices) == 0:
-                    continue
-                idx_high = crossing_indices[0]
-            else:
-                # Negative pulse
-                peak = min_val
-                low_level = baseline + low_frac * (peak - baseline)
-                high_level = baseline + high_frac * (peak - baseline)
-                crossing_indices = np.where(pulse < low_level)[0]
-                if len(crossing_indices) == 0:
-                    continue
-                idx_low = crossing_indices[0]
-                crossing_indices = np.where(pulse < high_level)[0]
-                crossing_indices = crossing_indices[crossing_indices > idx_low]
-                if len(crossing_indices) == 0:
-                    continue
-                idx_high = crossing_indices[0]
-
-            t_low[i] = t[idx_low]
-            t_high[i] = t[idx_high]
-            t_rise[i] = t_high[i] - t_low[i]
-
-        return t_rise, t_low, t_high
+        return np.array(rise_times), np.array(t_lows), np.array(t_highs)
  
-    def find_decay_time(self, low_frac: float = 0.1, high_frac: float = 0.9, use_savgol: bool = True,
-                    window_length: int = 51, polyorder: int = 3):
+    def find_decay_times(self, **kwargs):
         """
-        Find decay time between high_frac and low_frac thresholds for a batch of pulses.
-        Returns arrays of (t_decay, t_high, t_low), each shape (n_pulse,)
+        Compute decay times for all pulses in the batch.
+        Returns:
+            decay_times: np.ndarray of shape (n_pulses,)
+            t_highs: np.ndarray of shape (n_pulses,)
+            t_lows: np.ndarray of shape (n_pulses,)
         """
-        data = self.data  # shape (n_pulse, n_samples)
-        n_pulse, n_samples = data.shape
-        t = self.time     # shape (n_samples,)
+        decay_times = []
+        t_highs = []
+        t_lows = []
 
-        # Optionally smooth data, shape (n_pulse, n_samples)
-        if use_savgol:
-            data_smooth = np.array([
-                savgol_filter(pulse, window_length=window_length, polyorder=polyorder)
-                for pulse in data
-            ])
+        for i in range(self.data.shape[0]):
+            pulse = Pulse(self.data[i], self.sampling_rate)
+            t_decay, t_high, t_low = pulse.find_decay_time(**kwargs)
+            decay_times.append(t_decay)
+            t_highs.append(t_high)
+            t_lows.append(t_low)
+
+        return np.array(decay_times), np.array(t_highs), np.array(t_lows)
+
+    def find_peak_fwhm_times(self, **kwargs):
+        """
+        Calculate peak/FWHM times for all pulses in the batch.
+        Returns:
+            intervals: np.ndarray of shape (n_pulses,)
+            t_Ls: np.ndarray of shape (n_pulses,)
+            t_Rs: np.ndarray of shape (n_pulses,)
+            (optionally) normed: list of np.ndarrays (if return_norm=True)
+        """
+        intervals = []
+        t_Ls = []
+        t_Rs = []
+        normed = []
+
+        # Check if user wants normalized output
+        want_norm = kwargs.get('return_norm', False)
+
+        for i in range(self.data.shape[0]):
+            pulse = Pulse(self.data[i], self.sampling_rate)
+            result = pulse.find_peak_fwhm_time(**kwargs)
+            if want_norm:
+                interval, t_L, t_R, norm = result
+                normed.append(norm)
+            else:
+                interval, t_L, t_R = result
+            intervals.append(interval)
+            t_Ls.append(t_L)
+            t_Rs.append(t_R)
+
+        if want_norm:
+            return np.array(intervals), np.array(t_Ls), np.array(t_Rs), normed
         else:
-            data_smooth = data
-
-        t_decay = np.full(n_pulse, np.nan)
-        t_high = np.full(n_pulse, np.nan)
-        t_low = np.full(n_pulse, np.nan)
-
-        for i in range(n_pulse):
-            pulse = data_smooth[i]
-            # Handle positive or negative pulses
-            if np.abs(pulse.max()) > np.abs(pulse.min()):
-                max_val = pulse.max()
-                peak_idx = pulse.argmax()
-                high = high_frac * max_val
-                low = low_frac * max_val
-                def crossed(x, th): return x <= th
-            else:
-                max_val = pulse.min()
-                peak_idx = pulse.argmin()
-                high = high_frac * max_val
-                low = low_frac * max_val
-                def crossed(x, th): return x >= th
-
-            idx_high_candidates = np.where(crossed(pulse[peak_idx:], high))[0]
-            if idx_high_candidates.size == 0:
-                continue
-            idx_high = idx_high_candidates[0] + peak_idx
-
-            idx_low_candidates = np.where(crossed(pulse[idx_high:], low))[0]
-            if idx_low_candidates.size == 0:
-                t_high[i] = t[idx_high]
-                continue
-            idx_low = idx_low_candidates[0] + idx_high
-
-            t_decay[i] = t[idx_low] - t[idx_high]
-            t_high[i] = t[idx_high]
-            t_low[i] = t[idx_low]
-
-        return t_decay, t_high, t_low
-
-    def find_peak_fwhm_time(self, 
-            L: float = 0.9, R: float = 0.9, type: str = 'peak', peak_deriv: bool = True, return_norm: bool = False, time_space: str = 'deriv',
-            use_savgol: bool = True, window_length=51, polyorder=3, height=0.4, prominence=0.43):
-        """
-        Calculate the peak/FWHM time for a batch of pulses.
-        Returns arrays of (interval, t_L, t_R) each shape (n_pulse,)
-        """
-        data = self.data  # shape: (n_pulse, n_samples)
-        t = self.time     # shape: (n_samples,)
-        n_pulse, n_samples = data.shape
-
-        if type not in ('peak', 'fwhm'):
-            raise TypeError("type must be 'peak' or 'fwhm'.")
-        if type == 'fwhm':
-            L = 0.5
-            R = 0.5
-
-        intervals = np.full(n_pulse, np.nan)
-        t_Ls = np.full(n_pulse, np.nan)
-        t_Rs = np.full(n_pulse, np.nan)
-
-        for i in range(n_pulse):
-            pulse = data[i]
-            # --- Derivative or pulse processing ---
-            if peak_deriv:
-                if use_savgol:
-                    derivative = savgol_filter(pulse, window_length=window_length, polyorder=polyorder, deriv=1)
-                else:
-                    derivative = np.gradient(pulse)
-            else:
-                if use_savgol:
-                    derivative = savgol_filter(pulse, window_length=window_length, polyorder=polyorder)
-                else:
-                    derivative = pulse
-
-            max_abs = np.max(np.abs(derivative))
-            if max_abs == 0:
-                deriv_norm = derivative * 0
-            else:
-                deriv_norm = derivative / max_abs
-
-            peaks, _ = find_peaks(np.abs(deriv_norm), height=height, prominence=prominence)
-            if len(peaks) == 0:
-                continue
-
-            largest_peak_idx = peaks[np.argmax(np.abs(deriv_norm[peaks]))]
-            sign = np.sign(deriv_norm[largest_peak_idx]) if deriv_norm[largest_peak_idx] != 0 else 1
-
-            L_val = L * sign
-            first_peak_idx = peaks[0]
-            left = deriv_norm[:first_peak_idx+1]
-            left_cross = np.where(sign * left >= sign * L_val)[0]
-            idx_L = left_cross[0] if len(left_cross) > 0 else 0
-
-            R_val = R * sign
-            last_peak_idx = peaks[-1]
-            right = deriv_norm[last_peak_idx:]
-            right_cross = np.where(sign * right <= sign * R_val)[0]
-            idx_R = right_cross[0] if len(right_cross) > 0 else len(t) - 1 - last_peak_idx
-
-            # Interpolation
-            def interp_time(idx, arr, val, t_arr, offset=0):
-                if idx == 0:
-                    return t_arr[offset + idx]
-                x0, x1 = t_arr[offset + idx - 1], t_arr[offset + idx]
-                y0, y1 = arr[idx - 1], arr[idx]
-                if y1 == y0:
-                    return x0
-                return x0 + (val - y0) * (x1 - x0) / (y1 - y0)
-
-            t_L_deriv = interp_time(idx_L, left, L_val, t)
-            t_R_deriv = interp_time(idx_R, right, R_val, t, offset=last_peak_idx)
-
-            if time_space == 'pulse':
-                pulse_norm = (pulse - np.min(pulse)) / (np.max(pulse) - np.min(pulse))
-                left_pulse = pulse_norm[:first_peak_idx+1]
-                left_cross_pulse = np.where(sign * left_pulse >= sign * L)[0]
-                idx_L_pulse = left_cross_pulse[0] if len(left_cross_pulse) > 0 else 0
-                t_L = interp_time(idx_L_pulse, left_pulse, L, t)
-                right_pulse = pulse_norm[last_peak_idx:]
-                right_cross_pulse = np.where(sign * right_pulse <= sign * R)[0]
-                idx_R_pulse = right_cross_pulse[0] if len(right_cross_pulse) > 0 else len(t) - 1 - last_peak_idx
-                t_R = interp_time(idx_R_pulse, right_pulse, R, t, offset=last_peak_idx)
-            else:
-                t_L = t_L_deriv
-                t_R = t_R_deriv
-
-            if t_L < t_R:
-                intervals[i] = abs(t_R - t_L)
-                t_Ls[i] = t_L
-                t_Rs[i] = t_R
-            else:
-                # Mark as invalid
-                intervals[i] = np.nan
-                t_Ls[i] = np.nan
-                t_Rs[i] = np.nan
-
-        if return_norm:
-            # Optionally, also return the last computed deriv_norm (not batch, just for the last one)
-            return intervals, t_Ls, t_Rs, deriv_norm
-        else:
-            return intervals, t_Ls, t_Rs
+            return np.array(intervals), np.array(t_Ls), np.array(t_Rs)
 
     def calculate_area(self):
         return np.sum(self.data, axis=1)
 
-    def trapezoidal_filter(self, data, rise: float = 120, flat: float = 400):
+    def trapezoidal_filter(self, rise=120, flat=400):
         """
-        Apply trapezoidal filter to a batch of pulses.
-        :param data: 2D array (n_pulse, n_samples) or 1D array (n_samples)
-        :param rise: rising length in samples
-        :param flat: flat-top length in samples
-        :return: filtered pulses, same shape as input
+        Apply trapezoidal filter to all pulses in the batch.
+        Returns a numpy array of shape (n_pulses, n_samples)
         """
-        kernel = np.concatenate([np.ones(rise), np.zeros(flat), -np.ones(rise)])
-        kernel = kernel / rise
+        filtered = []
+        for i in range(self.data.shape[0]):
+            pulse = Pulse(self.data[i], self.sampling_rate)
+            filtered.append(pulse.trapezoidal_filter(pulse.data, rise=rise, flat=flat))
+        return np.array(filtered)
 
-        if data.ndim == 1:
-            return np.convolve(data, kernel, mode='same')
-        else:
-            # For 2D, apply along axis 1 (samples)
-            return np.array([np.convolve(row, kernel, mode='same') for row in data])
-
-    def normalize_pulse(self, bl: float = 100, trap_rise: float = 120, trap_flat: float = 400, return_amp: bool = False):
+    def normalize_pulses(self, bl=100, trap_rise=120, trap_flat=400, return_amp=False):
         """
-        Normalize a batch of pulses.
-        :param bl: baseline length (default: 100)
-        :param trap_rise: rising length in samples (default: 120)
-        :param trap_flat: flat-top length in samples (default: 400)
-        :return: normalized pulses, and optionally amplitudes
+        Normalize all pulses in the batch.
+        Returns:
+            - pulse_norms: (n_pulses, n_samples)
+            - amplitudes: (n_pulses,) if return_amp is True
         """
-        pulse = self.data  # shape (n_pulse, n_samples)
-        if pulse.ndim == 1:
-            pulse = pulse[np.newaxis, :]  # handle single pulse as batch
-
-        # Baseline subtraction (per pulse)
-        baselines = np.mean(pulse[:, :int(bl)], axis=1, keepdims=True)  # shape (n_pulse, 1)
-        pulse_bs = pulse - baselines  # shape (n_pulse, n_samples)
-
-        # Trapezoidal filter amplitude calculation (per pulse)
-        filt_pulse = self.trapezoidal_filter(pulse_bs, rise=trap_rise, flat=trap_flat)
-        start = int(trap_rise + trap_flat)
-        amplitudes = np.max(np.abs(filt_pulse[:, start:]), axis=1)  # shape (n_pulse,)
-
-        # Avoid division by zero
-        amplitudes[amplitudes == 0] = 1
-
-        # Normalize
-        pulse_norm = pulse_bs / amplitudes[:, np.newaxis]  # shape (n_pulse, n_samples)
+        pulse_norms = []
+        amplitudes = []
+        for i in range(self.data.shape[0]):
+            pulse = Pulse(self.data[i], self.sampling_rate)
+            result = pulse.normalize_pulse(bl=bl, trap_rise=trap_rise, trap_flat=trap_flat, return_amp=return_amp)
+            if return_amp:
+                norm, amp = result
+                pulse_norms.append(norm)
+                amplitudes.append(amp)
+            else:
+                norm = result
+                pulse_norms.append(norm)
         if return_amp:
-            return pulse_norm, amplitudes
+            return np.array(pulse_norms), np.array(amplitudes)
         else:
-            return pulse_norm
+            return np.array(pulse_norms)
 
-    def count_peaks(self, use_savgol: bool = True, deriv: bool = True, 
-                window_length=51, polyorder=3, height=0.4, prominence=0.43):
+    def count_peaks(self, **kwargs):
         """
-        Count peaks for each pulse in a batch.
-        Returns an array of peak counts, one per pulse.
+        Count peaks for each pulse in the batch using the Pulse class's count_peaks method.
+        Returns:
+            counts: np.ndarray of shape (n_pulses,)
         """
-        data = self.data  # shape (n_pulse, n_samples)
-        n_pulse = data.shape[0]
-        counts = np.zeros(n_pulse, dtype=int)
-
-        for i in range(n_pulse):
-            pulse = data[i]
-            if deriv:
-                if use_savgol:
-                    pulse_proc = savgol_filter(pulse, window_length=window_length, polyorder=polyorder, deriv=1)
-                else:
-                    pulse_proc = np.gradient(pulse)
-            else:
-                if use_savgol:
-                    pulse_proc = savgol_filter(pulse, window_length=window_length, polyorder=polyorder)
-                else:
-                    pulse_proc = pulse
-
-            max_abs = np.max(np.abs(pulse_proc))
-            if max_abs == 0:
-                deriv_norm = pulse_proc * 0
-            else:
-                deriv_norm = pulse_proc / max_abs
-
-            peaks, _ = find_peaks(np.abs(deriv_norm), height=height, prominence=prominence)
-            counts[i] = len(peaks)
-        return counts
+        counts = []
+        for i in range(self.data.shape[0]):
+            pulse = Pulse(self.data[i], self.sampling_rate)
+            n_peaks = pulse.count_peaks(**kwargs)
+            counts.append(n_peaks)
+        return np.array(counts)
     
     def l1_norm(self, reference_pulse):
         """
-        Compute L1 norm between each pulse in the batch and the reference pulse.
-        :param reference_pulse: PulseBatch or Pulse with .data and .time
-        :return: array of L1 norms, shape (n_pulse,)
+        Compute L1 norm (with alignment) between each pulse in the batch and a reference pulse.
+        :param reference_pulse: A Pulse object to compare against
+        :return: np.ndarray of L1 norms, shape (n_pulses,)
         """
-        # Normalize both pulses
-        pulse_norm = self.normalize_pulse()  # shape (n_pulse, n_samples)
-        ref_norm = reference_pulse.normalize_pulse()
-        t = self.time
+        l1s = []
+        for i in range(self.data.shape[0]):
+            pulse = Pulse(self.data[i], self.sampling_rate)
+            l1 = pulse.l1_norm(reference_pulse)
+            l1s.append(l1)
+        return np.array(l1s)
 
-        if pulse_norm.shape[1] != ref_norm.shape[-1]:
-            raise ValueError("Pulses must have the same length.")
-
-        if ref_norm.ndim == 1:
-            ref_norm = np.broadcast_to(ref_norm, pulse_norm.shape)
-        elif ref_norm.shape[0] != pulse_norm.shape[0]:
-            # If reference is a batch but not same number of pulses, broadcast first pulse
-            ref_norm = np.broadcast_to(ref_norm[0], pulse_norm.shape)
-
-        # Find rising edge times on normalized pulses
-        _, t_low_pulse, _ = self.find_rise_time()
-        _, t_low_ref, _ = reference_pulse.find_rise_time()
-
-        # Calculate shift (in samples) for each pulse
-        dt = t[1] - t[0]
-        shift_samples = (t_low_pulse - t_low_ref) / dt
-
-        l1_norms = np.zeros(pulse_norm.shape[0])
-        for i in range(pulse_norm.shape[0]):
-            s = shift_samples[i]
-            # Handle nan or inf shift
-            if not np.isfinite(s):
-                s = 0
-            s = int(round(s))
-            if s > 0:
-                ref_aligned = np.pad(ref_norm[i], (s, 0), mode='constant')[:len(pulse_norm[i])]
-                pulse_aligned = pulse_norm[i]
-            elif s < 0:
-                pulse_aligned = np.pad(pulse_norm[i], (-s, 0), mode='constant')[:len(ref_norm[i])]
-                ref_aligned = ref_norm[i]
-            else:
-                pulse_aligned = pulse_norm[i]
-                ref_aligned = ref_norm[i]
-
-            min_len = min(len(pulse_aligned), len(ref_aligned))
-            pulse_aligned = pulse_aligned[:min_len]
-            ref_aligned = ref_aligned[:min_len]
-            l1_norms[i] = np.sum(np.abs(pulse_aligned - ref_aligned))
-        return l1_norms
-
-    def find_amplitude(self, n_baseline: float = 100, rise: float = 120, flat: float = 400):
+    def find_amplitudes(self, n_baseline: float = 100, rise: float = 120, flat: float = 400):
         """
-        Find amplitude for each pulse in the batch using trapezoidal filter.
-        Returns: amplitudes, shape (n_pulse,)
+        Find amplitudes for all pulses in the batch using the per-pulse find_amplitude method.
+        Returns:
+            amplitudes: np.ndarray of shape (n_pulses,)
         """
-        data = self.data  # shape (n_pulse, n_samples)
-        n_pulse = data.shape[0]
-        amplitudes = np.zeros(n_pulse)
-        for i in range(n_pulse):
-            baseline = np.mean(data[i, :int(n_baseline)])
-            pulse_bs = data[i] - baseline
-            filt = self.trapezoidal_filter(pulse_bs, rise, flat)
-            start = int(rise + flat)
-            amplitude = np.max(np.abs(filt[start:]))
-            if amplitude == 0:
-                amplitude = 1
-            amplitudes[i] = amplitude
-        return amplitudes
+        amplitudes = []
+        for i in range(self.data.shape[0]):
+            pulse = Pulse(self.data[i], self.sampling_rate)
+            amp = pulse.find_amplitude(n_baseline=n_baseline, rise=rise, flat=flat)
+            amplitudes.append(amp)
+        return np.array(amplitudes)
 
     def normalize_deriv(self, window_length: int = 51, polyorder: int = 3):
         """
-        Return a normalized derivative for each pulse in a batch.
-        Output: array of shape (n_pulse, n_samples)
+        Apply normalize_deriv to all pulses in the batch.
+        Returns:
+            deriv_norms: np.ndarray of shape (n_pulses, n_samples)
         """
-        data = self.data  # shape: (n_pulse, n_samples)
-        derivs = []
-        for pulse in data:
-            deriv = savgol_filter(pulse, window_length=window_length, polyorder=polyorder, deriv=1)
-            peak_idx = np.argmax(np.abs(deriv))
-            peak_val = deriv[peak_idx]
-            if peak_val == 0:
-                peak_val = 1
-            deriv_norm = deriv / peak_val
-            derivs.append(deriv_norm)
-        return np.stack(derivs)
+        deriv_norms = []
+        for i in range(self.data.shape[0]):
+            pulse = Pulse(self.data[i], self.sampling_rate)
+            norm = pulse.normalize_deriv(window_length=window_length, polyorder=polyorder)
+            deriv_norms.append(norm)
+        return np.array(deriv_norms)
 
 
 class PulseGenerator:
